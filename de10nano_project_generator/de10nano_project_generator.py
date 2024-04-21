@@ -13,6 +13,8 @@ from pathlib import Path
 from signals import *
 # tcl & hdl scripts
 from HDL_n_Tcl import *
+# commandline
+import argparse
 
 # globel setting
 E_CLK : str = 'e_clk'           # 标准外部时钟的名称（外部时钟指的是 de10nano 通过编程的方式从 PIO 向 FPGA 发送的时钟信号）
@@ -285,9 +287,12 @@ def de10nano_project_generator(
     )
 
     
-    
-
+def main():
+    parser = argparse.ArgumentParser(description="DE10Nano Project Generator")
+    parser.add_argument('-p', '--path', help='Path to the hdlgen project')
+    args = parser.parse_args()
+    de10nano_project_generator(args.path, ' ', ' ', ' ', ' ', ' ')
 
 
 if __name__ == '__main__':
-    pass
+    main()
