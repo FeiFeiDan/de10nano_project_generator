@@ -31,62 +31,148 @@ stream_hander.setFormatter(formatter)
 module_logger.addHandler(file_hander)
 module_logger.addHandler(stream_hander)
 
-def hdlgen_project_parser(hdlgen_project_path : str) -> Tuple[List[Port], List[str], str, str]:
+def hdlgen_environment_parser(hdlgen_project_path: str) -> List[str]:
+    """
+    This function parses the HDLGen environment information to extract the VHDL file paths.
+
+    Parameters:
+    HDLGen_project_path (str): The path to the HDLGen project file.
+
+    Returns:
+    vhdl_file_paths (List[str]): A list containing the paths of all VHDL files extracted from the project.
+    Raises:
+    FileNotFoundError: If the provided HDLGen project file does not exist.
+    AttributeError: If the XML structure does not contain the expected nodes.
+    """
+
+    module_logger.info(f'INFO: Parsing HDLGen environment at {hdlgen_project_path}')
+    
+    # Convert input path to Path object and ensure it exists
+    hdlgen_project_path_obj = Path(hdlgen_project_path)
+    if not hdlgen_project_path_obj.exists():
+        module_logger.error(f'ERROR: The HDLGen project file "{hdlgen_project_path}" does not exist.')
+        raise FileNotFoundError(f'The file "{hdlgen_project_path}" does not exist.')
+
+    hdlgen_project_path_obj = hdlgen_project_path_obj.resolve()
+
+    # Load the HDLGen project XML
+    try:
+        project = minidom.parse(str(hdlgen_project_path_obj))
+    except Exception as e:
+        module_logger.error(f'ERROR: Unable to parse the XML file due to {e}')
+        raise
+
+    # Extract package folder location and resolve it to an absolute path
+    try:
+        project_env = project.getElementsByTagName("environment")[0]
+        main_package_hdlgen_path = Path(project_env.firstChild.data).resolve() / 'Package/mainPackage.hdlgen'
+        
+        # Parse mainPackage.hdlgen for component paths
+        main_package = minidom.parse(str(main_package_hdlgen_path))
+        components = main_package.getElementsByTagName("component")
+        vhdl_file_paths = []
+
+        if components:
+            for component in components:
+                dir_tag = component.getElementsByTagName('dir')[0]
+                vhdl_path = main_package_hdlgen_path.parent / dir_tag.firstChild.data
+                vhdl_file_paths.append(str(vhdl_path.absolute()))
+
+        # Get the top module VHDL file path
+        project_name = project.getElementsByTagName("name")[0].firstChild.data
+        top_module_vhdl_path = (Path(project.getElementsByTagName('location')[0].firstChild.data).resolve() / f'VHDL/model/{project_name}.vhd').absolute()
+        vhdl_file_paths.append(str(top_module_vhdl_path))
+
+        # Get the MainPackage.vhd path
+        main_package_vhd_path = Path(project_env.firstChild.data).resolve() / 'Package/MainPackage.vhd'
+        vhdl_file_paths.append(str(main_package_vhd_path.absolute()))
+        
+        return vhdl_file_paths
+
+    except IndexError as ie:
+        module_logger.error(f'ERROR: Unable to parse the XML due to missing expected nodes: {ie}')
+        raise AttributeError('The XML structure does not contain the expected nodes.')
+
+    except Exception as e:
+        module_logger.error(f'ERROR: Unexpected error occurred while parsing the XML: {e}')
+        raise
+
+def hdlgen_project_parser(hdlgen_project_path: str) -> Tuple[List[Port], List[str], str, str]:
     '''
     This function aims to get the information from the hdlgen project file, which is organised in XML.
 
     Parameters:
-    - hdlgen_project_path (str): The path of the hdlgen project file, which is expect as absolute path. Relative path will work if you use this program in command line.
+    - hdlgen_project_path (str): The path of the hdlgen project file, which is expected as an absolute path. Relative path will work if you use this program in the command line.
 
     Returns:
-    - top_module_ports (List[Port]): The ports of users design.
-    - hdl_paths (List[str]): The paths of hdl file of top module and sub module, which will return in absolute path.
-    - design_name (str): The name of top module.
-    - testbench (str): The testbench of top module.
+    - top_module_ports (List[Port]): The ports of the user's design.
+    - hdl_paths (List[str]): The paths of the hdl file of the top module and submodules, returned in absolute path.
+    - design_name (str): The name of the top module.
+    - testbench (str): The testbench of the top module.
     '''
     module_logger.info(f'INFO: Function hdlgen_project_parser started with parameter ---- hdlgen_project_path: {hdlgen_project_path}.')
-    top_module_ports : List[Port]
-    hdl_paths : List[str]
-    design_name : str
-    testbench : str
+    top_module_ports: List[Port] = []
+    hdl_paths: List[str] = []
+    design_name: str = ""
+    testbench: str = ""
 
     project_path = Path(hdlgen_project_path)
-    # First, check out whether the path exists
-    assert project_path.exists(), f'ERROR: path {hdlgen_project_path} not exist.'
-    
+
+    # Check if the path exists
+    if not project_path.exists():
+        module_logger.error(f'ERROR: path {hdlgen_project_path} not exist.')
+        raise FileNotFoundError(f'File not found: {hdlgen_project_path}')
+
     if project_path.is_absolute():
-        module_logger.info('INFO: Received a absolute path.')
+        module_logger.info('INFO: Received an absolute path.')
     else:
         project_path = project_path.absolute()
-        module_logger.info('INFO: Received a relative path.')
-    project_path = project_path.as_posix() # Transfer path to posix path
+        module_logger.info('INFO: Received a relative path. Converting to absolute path.')
+    project_path = project_path.as_posix()  # Transfer path to posix path
 
-    hdlgen_project = minidom.parse(project_path)
-    # Get the design_name from the project xml file
     try:
-        design_name = hdlgen_project.getElementsByTagName('name')[0].firstChild.data
-        if design_name:
-            module_logger.info(f'INFO: design_name is {design_name}.')
-        else:
-            module_logger.error('ERROR: No \'name\' node found.')
-            raise SystemExit(1)
-    except AttributeError:
-        module_logger.error('ERROR: \'name\' node exists but has no child text content.')
-        raise SystemExit(1)
+        project = minidom.parse(project_path)
+        design_name = project.getElementsByTagName('name')[0].firstChild.data
 
-    # Get the ioports from the project xml file
-    try:
-        entity_ioports_nodes = hdlgen_project.getElementsByTagName("entityIOPorts")
-        if entity_ioports_nodes:
-            entity_ioports = entity_ioports_nodes[0]
+        # Process entityIOPorts
+        entity_ioports = project.getElementsByTagName("entityIOPorts")[0]
+        if entity_ioports is None:
+            module_logger.error('ERROR: No entityIOPorts found in the XML.')
+            raise ValueError('Invalid XML structure. Missing entityIOPorts.')
+
+        for signal in entity_ioports.getElementsByTagName("signal"):
+            if signal.getElementsByTagName("name") == []:
+                module_logger.warning('WARNING: Signal without a name found. Skipping...')
+                continue
+            
+            name = signal.getElementsByTagName("name")[0].firstChild.data
+            if name == 'clk':
+                module_logger.info('INFO: clk detected. Skipping...')
+                continue
+            
+            try:
+                mode = signal.getElementsByTagName("mode")[0].firstChild.data
+                type_str = signal.getElementsByTagName("type")[0].firstChild.data
+                description = signal.getElementsByTagName("description")[0].firstChild.data
+            except IndexError:
+                module_logger.error('ERROR: Incomplete signal data in XML. Skipping...')
+                continue
+
+            port = Port(name, mode, type_str, description)
+            module_logger.info(f"INFO: signal name: {port.name}, signal mode: {port.mode}, signal type: {port.type_str}, signal width: {port.width}")
+            top_module_ports.append(port)
+
+        testbench_element = project.getElementsByTagName('TBNote')
+        if testbench_element:
+            testbench = testbench_element[0].firstChild.data
         else:
-            module_logger.error('ERROR: No \'entityIOPorts\' node found.')
-            sys.exit(1)
-    except IndexError:
-        module_logger.error('ERROR: \'entityIOPorts\' node not found.')
-        sys.exit(1)
-    for signal in entity_ioports.getElementsByTagName("signal"):
-        pass
+            module_logger.warning('WARNING: No TBNote element found in the XML. Testbench will be empty.')
+
+        # TODO: Parse and extract hdl_paths and testbench from the XML
+
+    except Exception as e:
+        module_logger.error(f'ERROR: An error occurred while parsing the XML: {e}')
+        raise
 
     return top_module_ports, hdl_paths, design_name, testbench
 
